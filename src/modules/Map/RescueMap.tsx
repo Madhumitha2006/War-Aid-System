@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.5
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import L from 'leaflet';
 import { 
   Home, ShieldAlert, Crosshair, MapPin, Layers, 
   Plus, Calendar, CheckCircle2, UserCheck, Trash2, 
@@ -133,6 +134,16 @@ export default function RescueMap({
     'shelter', 'hospital', 'food', 'danger', 'invincibility', 'missing_person'
   ]);
   
+  // Dynamic Map Layer and Regional context settings
+  const [mapMode, setMapMode] = useState<'vector' | 'leaflet'>('leaflet');
+  const [activeRegion, setActiveRegion] = useState<'india' | 'kyiv'>('india');
+
+  // Leaflet map DOM pointer refs
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<L.Map | null>(null);
+  const markersGroupRef = useRef<L.LayerGroup | null>(null);
+  const routeLineRef = useRef<L.Polyline | null>(null);
+
   // Sidebar Tabs state
   const [sidebarTab, setSidebarTab] = useState<'intel' | 'streets' | 'routing'>('intel');
   const [selectedMarker, setSelectedMarker] = useState<MapMarker | null>(markers[0] || null);
@@ -162,54 +173,6 @@ export default function RescueMap({
   // Set selected marker automatically when changed from filters or lists
   const eligibleMarkers = markers.filter(m => selectedFilters.includes(m.type));
 
-  const handleFilterToggle = (type: MarkerType) => {
-    setSelectedFilters(prev => 
-      prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]
-    );
-  };
-
-  const handleAddMarkerFormSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newTitle.trim()) return;
-
-    onAddMarker({
-      type: newType,
-      location: { lat: Number(newLat) || 50.45, lng: Number(newLng) || 30.52 },
-      title: newTitle,
-      description: newDescription,
-      reportedBy: currentUser.name
-    });
-
-    setNewTitle('');
-    setNewDescription('');
-    setShowAddForm(false);
-  };
-
-  // Keep route planner updated if markers change
-  useEffect(() => {
-    if (markers.length > 0 && !selectedMarker) {
-      setSelectedMarker(markers[0]);
-    }
-  }, [markers]);
-
-  // Keep lat/lng synced with user location on opening droppin dialog
-  useEffect(() => {
-    if (currentUserLocation) {
-      setNewLat(Number(currentUserLocation.lat.toFixed(4)));
-      setNewLng(Number(currentUserLocation.lng.toFixed(4)));
-    }
-  }, [currentUserLocation, showAddForm]);
-
-  // Set default routing destination to the first shelter marker if present
-  useEffect(() => {
-    const firstShelter = markers.find(m => m.type === 'shelter');
-    if (firstShelter) {
-      setRoutingDestinationId(firstShelter.id);
-    } else if (markers.length > 0) {
-      setRoutingDestinationId(markers[0].id);
-    }
-  }, [markers]);
-
   // Kiev Tactical Grid dimensions mapping real coordinates
   const mapWidth = 800;
   const mapHeight = 500;
@@ -229,45 +192,6 @@ export default function RescueMap({
   };
 
   const userPos = currentUserLocation ? convertCoords(currentUserLocation.lat, currentUserLocation.lng) : null;
-
-  // Triggers dropping pin modal at the clicked vector coordinates directly
-  const handleMapGridClick = (e: React.MouseEvent<SVGSVGElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const clickY = e.clientY - rect.top;
-
-    const percentX = clickX / rect.width;
-    const percentY = 1 - (clickY / rect.height);
-
-    const calculatedLng = minLng + percentX * (maxLng - minLng);
-    const calculatedLat = minLat + percentY * (maxLat - minLat);
-
-    setNewLat(Number(calculatedLat.toFixed(4)));
-    setNewLng(Number(calculatedLng.toFixed(4)));
-    setShowAddForm(true);
-  };
-
-  // Toggle route condition status locally in mesh environment (simulates offline distributed state)
-  const toggleStreetStatus = (routeId: string) => {
-    setStreets(prev => prev.map(street => {
-      if (street.id === routeId) {
-        let nextStatus: 'clear' | 'warning' | 'blocked' = 'clear';
-        let desc = "Route clear of obstacles";
-        if (street.status === 'clear') {
-          nextStatus = 'warning';
-          desc = "Obstacles/debris reported. Speed advisory in place.";
-        } else if (street.status === 'warning') {
-          nextStatus = 'blocked';
-          desc = "Blocked. Path obstructed by concrete debris or fire.";
-        } else {
-          nextStatus = 'clear';
-          desc = "Route inspected and declared secure.";
-        }
-        return { ...street, status: nextStatus, statusDesc: desc };
-      }
-      return street;
-    }));
-  };
 
   // CORE ROUTING ENGINE: Path calculation bypassing threat/hazard circle nodes dynamically
   const calculateNavigationRoutingPoints = () => {
@@ -336,29 +260,408 @@ export default function RescueMap({
 
   const activeRouting = calculateNavigationRoutingPoints();
 
+  // Dynamic seeding of India specific relief markers
+  const handleIndiaSeedCheck = () => {
+    // Check if there are any markers inside India coordinate boundaries
+    const hasIndiaMarkers = markers.some(m => m.location.lat < 40 && m.location.lat > 5);
+    if (!hasIndiaMarkers) {
+      const indianSeeds = [
+        {
+          type: 'shelter' as const,
+          location: { lat: 13.0844, lng: 80.2699 }, // Chennai Nehru Stadium
+          title: "Nehru Indoor Stadium Relief Headquarters",
+          description: "Mass shelter with capacity for 3,000 citizens. Equipped with solar backups, water purifiers, pediatric nurse cots, and dry food stocks.",
+          reportedBy: "Civil Defense volunteer"
+        },
+        {
+          type: 'hospital' as const,
+          location: { lat: 19.0760, lng: 72.8777 }, // Mumbai Trauma Center
+          title: "Mumbai Municipal Triage Center",
+          description: "Emergency surgical ward handling trauma cases with high volume emergency reserves of O-negative blood.",
+          reportedBy: "National Health Dept"
+        },
+        {
+          type: 'food' as const,
+          location: { lat: 28.6139, lng: 77.2090 }, // Delhi supply depot
+          title: "Delhi Food & Blankets Emergency Depot",
+          description: "Relief coordination depot packing 5,000 ready meal kits and sanitary packets for immediate deployment.",
+          reportedBy: "Indian Red Cross"
+        },
+        {
+          type: 'danger' as const,
+          location: { lat: 19.0558, lng: 72.8795 }, // Mumbai flooding
+          title: "⚠️ Mithi River Flood Blockage Overpass",
+          description: "Waterlogging at critical junction. Depth is 1.4 meters. Vehicles are prohibited. Alternate routes advised.",
+          reportedBy: "Mumbai Traffic Police"
+        }
+      ];
+
+      indianSeeds.forEach(seed => {
+        onAddMarker(seed);
+      });
+    }
+  };
+
+  // Seeding check on component load
+  useEffect(() => {
+    if (activeRegion === 'india') {
+      handleIndiaSeedCheck();
+    }
+  }, [activeRegion]);
+
+  // Leaflet Map instance boot and teardown
+  useEffect(() => {
+    if (mapMode !== 'leaflet' || !mapRef.current) {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+      return;
+    }
+
+    // Default coordinate centers
+    const centerLat = activeRegion === 'india' ? 20.5937 : 50.4501;
+    const centerLng = activeRegion === 'india' ? 78.9629 : 30.5234;
+    const initialZoom = activeRegion === 'india' ? 5 : 13;
+
+    // Create Map
+    const map = L.map(mapRef.current, {
+      zoomControl: true,
+      scrollWheelZoom: true
+    }).setView([centerLat, centerLng], initialZoom);
+    
+    mapInstanceRef.current = map;
+
+    // Elegant Dark Theme CartoDB tiles matching our tactical UI
+    const tileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+      subdomains: 'abcd',
+      maxZoom: 19
+    }).addTo(map);
+
+    const markersGroup = L.layerGroup().addTo(map);
+    markersGroupRef.current = markersGroup;
+
+    // Drop pin when clicking on map
+    map.on('click', (e: L.LeafletMouseEvent) => {
+      const { lat, lng } = e.latlng;
+      setNewLat(Number(lat.toFixed(4)));
+      setNewLng(Number(lng.toFixed(4)));
+      setShowAddForm(true);
+    });
+
+    return () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+    };
+  }, [mapMode, activeRegion]);
+
+  // Render and update markers, user location, and active routing polyline
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    const markersGroup = markersGroupRef.current;
+    if (!map || !markersGroup) return;
+
+    markersGroup.clearLayers();
+
+    // Loop through markers in the system and map them
+    eligibleMarkers.forEach(m => {
+      const markerColor = CONST_COLORS[m.type] || '#3B82F6';
+      
+      const customIcon = L.divIcon({
+        className: 'custom-leaflet-marker',
+        html: `
+          <div class="relative flex items-center justify-center w-8 h-8">
+            <div class="absolute w-6 h-6 rounded-full opacity-40 animate-ping" style="background-color: ${markerColor}"></div>
+            <div class="relative w-4 h-4 rounded-full border-2 border-white shadow-md flex items-center justify-center" style="background-color: ${markerColor}">
+              <div class="w-1.5 h-1.5 bg-white rounded-full"></div>
+            </div>
+          </div>
+        `,
+        iconSize: [32, 32],
+        iconAnchor: [16, 16]
+      });
+
+      const lMarker = L.marker([m.location.lat, m.location.lng], { icon: customIcon });
+      
+      const popupHtml = `
+        <div class="p-2 font-sans max-w-[200px] text-zinc-900 leading-normal" style="font-family: Inter, sans-serif;">
+          <div class="text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded text-white inline-block mb-1.5" style="background-color: ${markerColor};">
+            ${m.type.toUpperCase().replace('_', ' ')}
+          </div>
+          <h4 class="text-xs font-bold text-zinc-900 leading-tight mb-1">${m.title}</h4>
+          <p class="text-[10px] text-zinc-600 leading-relaxed mb-2">${m.description}</p>
+          <div class="text-[8px] text-zinc-500 font-mono border-t border-zinc-200 pt-1">
+            Reported By: ${m.reportedBy} • ${m.verified ? '✓ Verified Safe' : '⚠️ Unverified'}
+          </div>
+        </div>
+      `;
+
+      lMarker.bindPopup(popupHtml, {
+        className: 'custom-leaflet-popup'
+      });
+
+      lMarker.on('click', () => {
+        setSelectedMarker(m);
+        setSidebarTab('intel');
+      });
+
+      lMarker.addTo(markersGroup);
+    });
+
+    // Handle user location
+    if (currentUserLocation) {
+      const userIcon = L.divIcon({
+        className: 'user-leaflet-marker',
+        html: `
+          <div class="relative flex items-center justify-center w-10 h-10">
+            <div class="absolute w-8 h-8 rounded-full border border-blue-500 animate-pulse bg-blue-500/10"></div>
+            <div class="w-4 h-4 rounded-full border-2 border-white bg-blue-500 shadow-xl"></div>
+          </div>
+        `,
+        iconSize: [40, 40],
+        iconAnchor: [20, 20]
+      });
+
+      const userMarker = L.marker([currentUserLocation.lat, currentUserLocation.lng], { icon: userIcon });
+      userMarker.bindPopup('<b class="text-xs text-zinc-900 font-sans">🙋 My Position Ready</b>').addTo(markersGroup);
+    }
+
+    // Active Routes planning
+    if (routeLineRef.current) {
+      routeLineRef.current.remove();
+      routeLineRef.current = null;
+    }
+
+    if (activeRouting && currentUserLocation) {
+      const dest = markers.find(m => m.id === routingDestinationId);
+      if (dest) {
+        const pathCoords: [number, number][] = [];
+        pathCoords.push([currentUserLocation.lat, currentUserLocation.lng]);
+
+        if (activeRouting.bended) {
+          // Calculate high priority detour path midway
+          const midLat = (currentUserLocation.lat + dest.location.lat) / 2;
+          const midLng = (currentUserLocation.lng + dest.location.lng) / 2;
+          pathCoords.push([midLat + 0.015, midLng + 0.015]); // offset safety Detour
+        }
+
+        pathCoords.push([dest.location.lat, dest.location.lng]);
+
+        const polyline = L.polyline(pathCoords, {
+          color: '#10B981',
+          weight: 4.5,
+          opacity: 0.9,
+          lineCap: 'round',
+          lineJoin: 'round',
+          dashArray: '8, 12'
+        }).addTo(map);
+
+        routeLineRef.current = polyline;
+      }
+    }
+
+  }, [currentUserLocation, eligibleMarkers, activeRouting, routingDestinationId, mapMode, activeRegion]);
+
+  // Center view on selected marker on live Leaflet map
+  useEffect(() => {
+    if (selectedMarker && mapInstanceRef.current && mapMode === 'leaflet') {
+      mapInstanceRef.current.setView([selectedMarker.location.lat, selectedMarker.location.lng], 14, {
+        animate: true
+      });
+    }
+  }, [selectedMarker, mapMode]);
+
+  // Duplicate declarations removed (moved to top of file)
+
+
+  const handleFilterToggle = (type: MarkerType) => {
+    setSelectedFilters(prev => 
+      prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]
+    );
+  };
+
+  const handleAddMarkerFormSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTitle.trim()) return;
+
+    onAddMarker({
+      type: newType,
+      location: { lat: Number(newLat) || 50.45, lng: Number(newLng) || 30.52 },
+      title: newTitle,
+      description: newDescription,
+      reportedBy: currentUser.name
+    });
+
+    setNewTitle('');
+    setNewDescription('');
+    setShowAddForm(false);
+  };
+
+  // Keep route planner updated if markers change
+  useEffect(() => {
+    if (markers.length > 0 && !selectedMarker) {
+      setSelectedMarker(markers[0]);
+    }
+  }, [markers]);
+
+  // Keep lat/lng synced with user location on opening droppin dialog
+  useEffect(() => {
+    if (currentUserLocation) {
+      setNewLat(Number(currentUserLocation.lat.toFixed(4)));
+      setNewLng(Number(currentUserLocation.lng.toFixed(4)));
+    }
+  }, [currentUserLocation, showAddForm]);
+
+  // Set default routing destination to the first shelter marker if present
+  useEffect(() => {
+    const firstShelter = markers.find(m => m.type === 'shelter');
+    if (firstShelter) {
+      setRoutingDestinationId(firstShelter.id);
+    } else if (markers.length > 0) {
+      setRoutingDestinationId(markers[0].id);
+    }
+  }, [markers]);
+
+  // Duplicative SVG measurements removed (moved to top of file)
+
+
+  // Triggers dropping pin modal at the clicked vector coordinates directly
+  const handleMapGridClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+
+    const percentX = clickX / rect.width;
+    const percentY = 1 - (clickY / rect.height);
+
+    const calculatedLng = minLng + percentX * (maxLng - minLng);
+    const calculatedLat = minLat + percentY * (maxLat - minLat);
+
+    setNewLat(Number(calculatedLat.toFixed(4)));
+    setNewLng(Number(calculatedLng.toFixed(4)));
+    setShowAddForm(true);
+  };
+
+  // Toggle route condition status locally in mesh environment (simulates offline distributed state)
+  const toggleStreetStatus = (routeId: string) => {
+    setStreets(prev => prev.map(street => {
+      if (street.id === routeId) {
+        let nextStatus: 'clear' | 'warning' | 'blocked' = 'clear';
+        let desc = "Route clear of obstacles";
+        if (street.status === 'clear') {
+          nextStatus = 'warning';
+          desc = "Obstacles/debris reported. Speed advisory in place.";
+        } else if (street.status === 'warning') {
+          nextStatus = 'blocked';
+          desc = "Blocked. Path obstructed by concrete debris or fire.";
+        } else {
+          nextStatus = 'clear';
+          desc = "Route inspected and declared secure.";
+        }
+        return { ...street, status: nextStatus, statusDesc: desc };
+      }
+      return street;
+    }));
+  };
+
+  // Duplicative calculateNavigationRoutingPoints removed (moved to top of file)
+
+
   return (
     <div id="rescue-map-container" className="space-y-4 my-2">
       
       {/* Visual Overlay Header and Toggles */}
-      <div id="map-control-hub" className="flex flex-wrap gap-2 items-center justify-between border-b border-zinc-800 pb-3">
+      <div id="map-control-hub" className="flex flex-wrap gap-3 items-center justify-between border-b border-zinc-800 pb-3">
         <div>
           <div className="flex items-center gap-2">
             <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
-            <h3 className="text-sm font-bold tracking-wider text-zinc-100 uppercase font-display">Resilient Local Grid Map</h3>
+            <h3 className="text-sm font-bold tracking-wider text-zinc-100 uppercase font-display">
+              {activeRegion === 'india' ? '🇮🇳 India Disaster Mitigation Grid' : '🇺🇦 Kyiv Rescue Coordination Grid'}
+            </h3>
           </div>
           <p className="text-[10px] text-zinc-400 mt-0.5 font-mono">
-            Kyiv Coordination Sector • Dual Mode: Interactive Offline Tactical Vectors (100% stable without Internet)
+            {activeRegion === 'india' 
+              ? 'Active Sectors: New Delhi, Mumbai, Chennai • Interactive Map Coordinates with Threat Routers' 
+              : 'Active Sector: Kyiv Metropolitan Area • Resilient Dual-Mode Hybrid GIS Vectors'
+            }
           </p>
         </div>
 
-        <button
-          id="trigger-add-pin-btn"
-          onClick={() => setShowAddForm(true)}
-          className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-1.5 rounded flex items-center gap-1.5 cursor-pointer shadow transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Drop Custom Hazard Pin</span>
-        </button>
+        {/* Dynamic Mode Switcher and Region Switcher */}
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Region selector */}
+          <div className="flex bg-zinc-950 border border-zinc-850 p-1 rounded-lg gap-1 select-none font-mono text-[10px]">
+            <button
+              id="btn-switch-india"
+              type="button"
+              onClick={() => {
+                setActiveRegion('india');
+                handleIndiaSeedCheck();
+              }}
+              className={`px-2.5 py-1.5 rounded transition-all tracking-wider cursor-pointer flex items-center gap-1 font-bold ${
+                activeRegion === 'india' 
+                  ? 'bg-amber-600/20 text-amber-400 border border-amber-500/30' 
+                  : 'text-zinc-500 hover:text-zinc-300'
+              }`}
+            >
+              🇮🇳 India
+            </button>
+            <button
+              id="btn-switch-kyiv"
+              type="button"
+              onClick={() => setActiveRegion('kyiv')}
+              className={`px-2.5 py-1.5 rounded transition-all tracking-wider cursor-pointer flex items-center gap-1 font-bold ${
+                activeRegion === 'kyiv' 
+                  ? 'bg-blue-600/20 text-cyan-400 border border-blue-500/30' 
+                  : 'text-zinc-500 hover:text-zinc-300'
+              }`}
+            >
+              🇺🇦 Ukraine
+            </button>
+          </div>
+
+          {/* Map display mode selector */}
+          <div className="flex bg-zinc-950 border border-zinc-850 p-1 rounded-lg gap-1 select-none font-mono text-[10px]">
+            <button
+              id="btn-switch-vector"
+              type="button"
+              onClick={() => setMapMode('vector')}
+              className={`px-2.5 py-1.5 rounded transition-all tracking-wider cursor-pointer font-bold ${
+                mapMode === 'vector' 
+                  ? 'bg-zinc-800 text-zinc-100 border border-zinc-700/60' 
+                  : 'text-zinc-500 hover:text-zinc-300'
+              }`}
+              title="Switch to resilient Offline CSS Vector Grid"
+            >
+              📡 Vector Grid
+            </button>
+            <button
+              id="btn-switch-leaflet"
+              type="button"
+              onClick={() => setMapMode('leaflet')}
+              className={`px-2.5 py-1.5 rounded transition-all tracking-wider cursor-pointer flex items-center gap-1 font-bold ${
+                mapMode === 'leaflet' 
+                  ? 'bg-emerald-600 text-white shadow-sm' 
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+              title="Switch to live Google/OSM Satellite Tile Layer"
+            >
+              🌍 Live Map
+            </button>
+          </div>
+
+          <button
+            id="trigger-add-pin-btn"
+            onClick={() => setShowAddForm(true)}
+            className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-1.5 rounded flex items-center gap-1.5 cursor-pointer shadow transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Drop Hazard Pin</span>
+          </button>
+        </div>
       </div>
 
       {/* Map display customizer options toolbar */}
@@ -488,361 +791,391 @@ export default function RescueMap({
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         
-        {/* Core Vector Grid Map Canvas (Simulates complete offline vector google style rendering) */}
-        <div className="lg:col-span-2 relative border rounded-xl overflow-hidden border-zinc-800 bg-[#070D19] min-h-[350px]">
-          {/* Grid Background lines */}
-          <div className="absolute inset-0 select-none pointer-events-none opacity-[0.03]">
-            <div className="w-full h-full bg-[linear-gradient(to_right,#FFF_1px,transparent_1px),linear-gradient(to_bottom,#FFF_1px,transparent_1px)] bg-[size:24px_24px]" />
+        {mapMode === 'leaflet' ? (
+          /* Live Interactive Satellite and Tile Map */
+          <div className="lg:col-span-2 relative border rounded-xl overflow-hidden border-zinc-800 bg-[#070D19] min-h-[420px] lg:min-h-[500px]">
+            <div 
+              ref={mapRef} 
+              id="leaflet-world-live-map" 
+              className="w-full h-full min-h-[420px] lg:min-h-[500px] z-[5]"
+            />
+            
+            {/* Informational overlay deck */}
+            <div className="absolute bottom-2 left-2 bg-slate-950/95 border border-zinc-850 text-[9px] p-2.5 rounded-lg text-zinc-400 max-w-xs font-mono z-[1000] select-none shadow">
+              🚀 <b className="text-emerald-400">Live Spatial GIS Connected</b><br />
+              • Click any spot to instantly drop coordination pin.<br />
+              • Region center: <span className="text-zinc-200 uppercase font-bold">{activeRegion === 'india' ? 'India' : 'Kyiv'}</span><br />
+              • Layer status: <span className="text-emerald-450">Active Global Raster</span>
+            </div>
+            
+            {/* Repopulate triggers */}
+            {activeRegion === 'india' && (
+              <button
+                type="button"
+                onClick={handleIndiaSeedCheck}
+                className="absolute top-2 right-12 bg-slate-900/90 border border-zinc-700 hover:border-zinc-500 hover:bg-slate-800 px-2 py-1 rounded text-[9px] text-zinc-300 font-mono z-[1000] flex items-center gap-1 transition-colors cursor-pointer"
+              >
+                <span>🔄 Seed India Pins</span>
+              </button>
+            )}
           </div>
+        ) : (
+          /* Core Vector Grid Map Canvas (Simulates complete offline vector google style rendering) */
+          <div className="lg:col-span-2 relative border rounded-xl overflow-hidden border-zinc-800 bg-[#070D19] min-h-[350px]">
+            {/* Grid Background lines */}
+            <div className="absolute inset-0 select-none pointer-events-none opacity-[0.03]">
+              <div className="w-full h-full bg-[linear-gradient(to_right,#FFF_1px,transparent_1px),linear-gradient(to_bottom,#FFF_1px,transparent_1px)] bg-[size:24px_24px]" />
+            </div>
 
-          <svg 
-            id="tactical-vector-live-map"
-            viewBox={`0 0 ${mapWidth} ${mapHeight}`} 
-            className="w-full h-full min-h-[350px] max-h-[500px] cursor-crosshair block"
-            onClick={handleMapGridClick}
-          >
-            {/* 1. SECTOR RADAR IDENTIFIER TEXT OVERLAY */}
-            {showGridOverlay && (
-              <g opacity="0.12" fontSize="7.5" fill="#94A3B8" fontFamily="monospace" fontWeight="bold">
-                {Array.from({ length: 8 }).map((_, col) => 
-                  Array.from({ length: 5 }).map((_, row) => {
-                    const cellName = `SEC-${String.fromCharCode(65 + row)}${col + 1}`;
+            <svg 
+              id="tactical-vector-live-map"
+              viewBox={`0 0 ${mapWidth} ${mapHeight}`} 
+              className="w-full h-full min-h-[350px] max-h-[500px] cursor-crosshair block"
+              onClick={handleMapGridClick}
+            >
+              {/* 1. SECTOR RADAR IDENTIFIER TEXT OVERLAY */}
+              {showGridOverlay && (
+                <g opacity="0.12" fontSize="7.5" fill="#94A3B8" fontFamily="monospace" fontWeight="bold">
+                  {Array.from({ length: 8 }).map((_, col) => 
+                    Array.from({ length: 5 }).map((_, row) => {
+                      const cellName = `SEC-${String.fromCharCode(65 + row)}${col + 1}`;
+                      return (
+                        <text key={`${col}-${row}`} x={(col * mapWidth) / 8 + 6} y={(row * mapHeight) / 5 + 14}>
+                          {cellName}
+                        </text>
+                      );
+                    })
+                  ) as any}
+                  {/* Visual coordinate lines */}
+                  {Array.from({ length: 7 }).map((_, i) => (
+                    <line key={`v-${i}`} x1={((i + 1) * mapWidth) / 8} y1="0" x2={((i + 1) * mapWidth) / 8} y2={mapHeight} stroke="#FFF" strokeWidth="0.5" strokeDasharray="5,15" />
+                  ))}
+                  {/* Horizontal coordinate lines */}
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <line key={`h-${i}`} x1="0" y1={((i + 1) * mapHeight) / 5} x2={mapWidth} y2={((i + 1) * mapHeight) / 5} stroke="#FFF" strokeWidth="0.5" strokeDasharray="5,15" />
+                  ))}
+                </g>
+              )}
+
+              {/* 2. RIVER WATERWAY LAYER */}
+              {showWaterways && (
+                <g id="waterways-layer">
+                  {/* Main blue Dnieper ribbon segment */}
+                  <path
+                    d="M 450,-10 C 470,80 430,170 480,260 C 510,310 535,390 525,440 C 520,470 545,510 545,520"
+                    fill="none"
+                    stroke="#1E3A8A"
+                    strokeWidth="26"
+                    strokeLinecap="round"
+                    opacity="0.3"
+                  />
+                  <path
+                    d="M 450,-10 C 470,80 430,170 480,260 C 510,310 535,390 525,440 C 520,470 545,510 545,520"
+                    fill="none"
+                    stroke="#0284C7"
+                    strokeWidth="6"
+                    strokeLinecap="round"
+                    opacity="0.25"
+                  />
+                  {/* Trukhaniv Island park area */}
+                  <path
+                    d="M 465,120 C 470,110 490,95 505,115 C 500,140 480,185 465,170 Z"
+                    fill="#064E3B"
+                    stroke="#10B981"
+                    strokeWidth="0.5"
+                    opacity="0.22"
+                  />
+                </g>
+              )}
+
+              {/* 3. ROADS & RESILIENT HIGHWAYS OVERLAY */}
+              {showStreets && (
+                <g id="streets-routing-layer">
+                  {streets.map((route) => {
+                    const svgPoints = route.points.map(p => convertCoords(p.lat, p.lng));
+                    const pathData = svgPoints.reduce((acc, pt, idx) => {
+                      return idx === 0 ? `M ${pt.x},${pt.y}` : `${acc} L ${pt.x},${pt.y}`;
+                    }, '');
+
+                    const isSelected = selectedRouteOnList?.id === route.id;
+                    
+                    // Style colors based on real-time transit status
+                    let routeStroke = '#10B981'; // clear (Green)
+                    if (route.status === 'warning') routeStroke = '#F59E0B'; // warning (Orange)
+                    if (route.status === 'blocked') routeStroke = '#EF4444'; // blocked (Red)
+
                     return (
-                      <text key={`${col}-${row}`} x={(col * mapWidth) / 8 + 6} y={(row * mapHeight) / 5 + 14}>
-                        {cellName}
-                      </text>
-                    );
-                  })
-                ) as any}
-                {/* Visual coordinate lines */}
-                {Array.from({ length: 7 }).map((_, i) => (
-                  <line key={`v-${i}`} x1={((i + 1) * mapWidth) / 8} y1="0" x2={((i + 1) * mapWidth) / 8} y2={mapHeight} stroke="#FFF" strokeWidth="0.5" strokeDasharray="5,15" />
-                ))}
-                {/* Horizontal coordinate lines */}
-                {Array.from({ length: 4 }).map((_, i) => (
-                  <line key={`h-${i}`} x1="0" y1={((i + 1) * mapHeight) / 5} x2={mapWidth} y2={((i + 1) * mapHeight) / 5} stroke="#FFF" strokeWidth="0.5" strokeDasharray="5,15" />
-                ))}
-              </g>
-            )}
-
-            {/* 2. RIVER WATERWAY LAYER */}
-            {showWaterways && (
-              <g id="waterways-layer">
-                {/* Main blue Dnieper ribbon segment */}
-                <path
-                  d="M 450,-10 C 470,80 430,170 480,260 C 510,310 535,390 525,440 C 520,470 545,510 545,520"
-                  fill="none"
-                  stroke="#1E3A8A"
-                  strokeWidth="26"
-                  strokeLinecap="round"
-                  opacity="0.3"
-                />
-                <path
-                  d="M 450,-10 C 470,80 430,170 480,260 C 510,310 535,390 525,440 C 520,470 545,510 545,520"
-                  fill="none"
-                  stroke="#0284C7"
-                  strokeWidth="6"
-                  strokeLinecap="round"
-                  opacity="0.25"
-                />
-                {/* Trukhaniv Island park area */}
-                <path
-                  d="M 465,120 C 470,110 490,95 505,115 C 500,140 480,185 465,170 Z"
-                  fill="#064E3B"
-                  stroke="#10B981"
-                  strokeWidth="0.5"
-                  opacity="0.22"
-                />
-              </g>
-            )}
-
-            {/* 3. ROADS & RESILIENT HIGHWAYS OVERLAY */}
-            {showStreets && (
-              <g id="streets-routing-layer">
-                {streets.map((route) => {
-                  const svgPoints = route.points.map(p => convertCoords(p.lat, p.lng));
-                  const pathData = svgPoints.reduce((acc, pt, idx) => {
-                    return idx === 0 ? `M ${pt.x},${pt.y}` : `${acc} L ${pt.x},${pt.y}`;
-                  }, '');
-
-                  const isSelected = selectedRouteOnList?.id === route.id;
-                  
-                  // Style colors based on real-time transit status
-                  let routeStroke = '#10B981'; // clear (Green)
-                  if (route.status === 'warning') routeStroke = '#F59E0B'; // warning (Orange)
-                  if (route.status === 'blocked') routeStroke = '#EF4444'; // blocked (Red)
-
-                  return (
-                    <g 
-                      key={route.id}
-                      className="cursor-pointer group"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        // Open streets tab inside sidebar
-                        setSidebarTab('streets');
-                        setSelectedRouteOnList(route);
-                      }}
-                    >
-                      {/* Interactive broad click detection base */}
-                      <path
-                        d={pathData}
-                        fill="none"
-                        stroke="#0D1E3A"
-                        strokeWidth="11"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        opacity="0.8"
-                      />
-                      {/* Asphalt dark ribbon core */}
-                      <path
-                        d={pathData}
-                        fill="none"
-                        stroke={isSelected ? "#64748B" : "#1E293B"}
-                        strokeWidth="6.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        opacity="0.95"
-                      />
-                      {/* Functional active state line */}
-                      <path
-                        d={pathData}
-                        fill="none"
-                        stroke={routeStroke}
-                        strokeWidth="2.2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        opacity={isSelected ? "1" : "0.75"}
-                      />
-                      {/* Evacuation traffic moving dots animation for clear paths */}
-                      {route.status === 'clear' && (
+                      <g 
+                        key={route.id}
+                        className="cursor-pointer group"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          // Open streets tab inside sidebar
+                          setSidebarTab('streets');
+                          setSelectedRouteOnList(route);
+                        }}
+                      >
+                        {/* Interactive broad click detection base */}
                         <path
                           d={pathData}
                           fill="none"
-                          stroke="#FFF"
-                          strokeWidth="1.2"
+                          stroke="#0D1E3A"
+                          strokeWidth="11"
                           strokeLinecap="round"
-                          strokeDasharray="4,24"
-                          className="animate-map-dash"
-                          opacity="0.9"
+                          strokeLinejoin="round"
+                          opacity="0.8"
                         />
-                      )}
-                    </g>
-                  );
-                })}
-              </g>
-            )}
-
-            {/* 4. TACTICAL DISTRICTS LABEL MARKERS */}
-            {showNeighborhoods && (
-              <g id="neighborhoods-layer" pointerEvents="none" opacity="0.32" fontSize="7" fill="#F1F5F9" fontFamily="monospace" fontWeight="bold">
-                {/* Kyiv landmarks with localized coordinate placement */}
-                <text x="210" y="270" textAnchor="middle">PODIL HISTORIC DISTRICT</text>
-                <text x="350" y="240" textAnchor="middle">✉ SHEVCHENKIVSKYI CENTER</text>
-                <text x="470" y="160" textAnchor="middle">🌳 TRUKHANIV FOREST</text>
-                <text x="370" y="320" textAnchor="middle">🏛️ PECHERSK HIGH DISTRICT</text>
-                <text x="180" y="440" textAnchor="middle">⚓ SOLOMIANSK SECTOR</text>
-                <text x="590" y="380" textAnchor="middle">👥 DARNYTSIA VOLUNTEER CORE</text>
-                
-                {/* River label */}
-                {showWaterways && (
-                  <text x="495" y="480" textAnchor="middle" fill="#0EA5E9" fontSize="8" transform="rotate(-75, 495, 480)">DNIPRO RIVER Evac Corridor</text>
-                )}
-              </g>
-            )}
-
-            {/* 5. HAZARD THREAT CIRCLES & ACTIVE IMPACT RANGE */}
-            {eligibleMarkers.filter(m => m.type === 'danger').map((m) => {
-              const pos = convertCoords(m.location.lat, m.location.lng);
-              return (
-                <g key={`danger-circle-${m.id}`} id={`danger-vector-circle-${m.id}`}>
-                  {/* Danger zone hazard boundary */}
-                  <circle 
-                    cx={pos.x} 
-                    cy={pos.y} 
-                    r="52" 
-                    fill="#EF4444" 
-                    fillOpacity="0.08" 
-                    stroke="#EF4444" 
-                    strokeWidth="1.2" 
-                    strokeDasharray="4,5.5" 
-                    className={emergencyMode ? '' : 'animate-pulse'}
-                  />
-                  {/* Outer pulsating danger alert ring */}
-                  <circle
-                    cx={pos.x}
-                    cy={pos.y}
-                    r="52"
-                    fill="none"
-                    stroke="#EF4444"
-                    strokeWidth="1.2"
-                    className="animate-signal-pulse"
-                  />
-                  {/* Center spot bullet */}
-                  <circle cx={pos.x} cy={pos.y} r="3" fill="#EF4444" />
+                        {/* Asphalt dark ribbon core */}
+                        <path
+                          d={pathData}
+                          fill="none"
+                          stroke={isSelected ? "#64748B" : "#1E293B"}
+                          strokeWidth="6.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          opacity="0.95"
+                        />
+                        {/* Functional active state line */}
+                        <path
+                          d={pathData}
+                          fill="none"
+                          stroke={routeStroke}
+                          strokeWidth="2.2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          opacity={isSelected ? "1" : "0.75"}
+                        />
+                        {/* Evacuation traffic moving dots animation for clear paths */}
+                        {route.status === 'clear' && (
+                          <path
+                            d={pathData}
+                            fill="none"
+                            stroke="#FFF"
+                            strokeWidth="1.2"
+                            strokeLinecap="round"
+                            strokeDasharray="4,24"
+                            className="animate-map-dash"
+                            opacity="0.9"
+                          />
+                        )}
+                      </g>
+                    );
+                  })}
                 </g>
-              );
-            })}
+              )}
 
-            {/* 6. INTERACTIVE ROUTING ENGINE PATH OVERLAY */}
-            {activeRouting && userPos && (
-              <g id="tactical-active-routing-overlay">
-                {(() => {
-                  const pathDataString = activeRouting.points.reduce((acc, pt, idx) => {
-                    return idx === 0 ? `M ${pt.x},${pt.y}` : `${acc} L ${pt.x},${pt.y}`;
-                  }, '');
+              {/* 4. TACTICAL DISTRICTS LABEL MARKERS */}
+              {showNeighborhoods && (
+                <g id="neighborhoods-layer" pointerEvents="none" opacity="0.32" fontSize="7" fill="#F1F5F9" fontFamily="monospace" fontWeight="bold">
+                  {/* Kyiv landmarks with localized coordinate placement */}
+                  <text x="210" y="270" textAnchor="middle">PODIL HISTORIC DISTRICT</text>
+                  <text x="350" y="240" textAnchor="middle">✉ SHEVCHENKIVSKYI CENTER</text>
+                  <text x="470" y="160" textAnchor="middle">🌳 TRUKHANIV FOREST</text>
+                  <text x="370" y="320" textAnchor="middle">🏛️ PECHERSK HIGH DISTRICT</text>
+                  <text x="180" y="440" textAnchor="middle">⚓ SOLOMIANSK SECTOR</text>
+                  <text x="590" y="380" textAnchor="middle">👥 DARNYTSIA VOLUNTEER CORE</text>
+                  
+                  {/* River label */}
+                  {showWaterways && (
+                    <text x="495" y="480" textAnchor="middle" fill="#0EA5E9" fontSize="8" transform="rotate(-75, 495, 480)">DNIPRO RIVER Evac Corridor</text>
+                  )}
+                </g>
+              )}
 
-                  return (
-                    <>
-                      {/* Backup thick dark route support shadow */}
-                      <path
-                        d={pathDataString}
-                        fill="none"
-                        stroke="#0F172A"
-                        strokeWidth="8"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        opacity="0.9"
-                      />
-                      {/* Active green signal line */}
-                      <path
-                        d={pathDataString}
-                        fill="none"
-                        stroke="#10B981"
-                        strokeWidth="4"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        opacity="0.85"
-                      />
-                      {/* Animated running dots indicating evacuations route direction */}
-                      <path
-                        d={pathDataString}
-                        fill="none"
-                        stroke="#FFF"
-                        strokeWidth="2.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeDasharray="10, 14"
-                        className="animate-map-dash"
-                      />
-                      
-                      {/* Display small detour icons if safety router bended around threat nodes */}
-                      {activeRouting.bended && activeRouting.points[1] && (
-                        <g transform={`translate(${activeRouting.points[1].x}, ${activeRouting.points[1].y - 12})`}>
-                          <rect x="-35" y="-10" width="70" height="15" rx="3" fill="#F59E0B" fillOpacity="0.95" />
-                          <text x="0" y="1" fill="#000" fontSize="7" fontWeight="bold" fontFamily="monospace" textAnchor="middle">DETOUR ACTIVE</text>
-                        </g>
-                      )}
-                    </>
-                  );
-                })()}
-              </g>
-            )}
-
-            {/* 7. ALL ELIGIBLE ENTITY ARRAYS (PINS) */}
-            {eligibleMarkers.map((m) => {
-              if (m.type === 'danger') return null; // Hazards handled with circles above
-              const pos = convertCoords(m.location.lat, m.location.lng);
-              const color = CONST_COLORS[m.type] || '#FFF';
-              const isSelected = selectedMarker?.id === m.id;
-
-              return (
-                <g 
-                  key={`marker-${m.id}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSelectedMarker(m);
-                    setSidebarTab('intel'); // switch tab onto inspector
-                  }}
-                  className="cursor-pointer group"
-                  id={`vector-pin-element-${m.id}`}
-                >
-                  {/* Pin Selection ring marker */}
-                  {isSelected && (
+              {/* 5. HAZARD THREAT CIRCLES & ACTIVE IMPACT RANGE */}
+              {eligibleMarkers.filter(m => m.type === 'danger').map((m) => {
+                const pos = convertCoords(m.location.lat, m.location.lng);
+                return (
+                  <g key={`danger-circle-${m.id}`} id={`danger-vector-circle-${m.id}`}>
+                    {/* Danger zone hazard boundary */}
                     <circle 
                       cx={pos.x} 
                       cy={pos.y} 
-                      r="15" 
-                      fill="none" 
-                      stroke={color} 
-                      strokeWidth="2" 
-                      opacity="0.9"
-                      className="animate-pulse"
+                      r="52" 
+                      fill="#EF4444" 
+                      fillOpacity="0.08" 
+                      stroke="#EF4444" 
+                      strokeWidth="1.2" 
+                      strokeDasharray="4,5.5" 
+                      className={emergencyMode ? '' : 'animate-pulse'}
                     />
-                  )}
-                  {/* Pulse behind icons */}
-                  <circle 
-                    cx={pos.x} 
-                    cy={pos.y} 
-                    r="8.5" 
-                    fill={color} 
-                    fillOpacity="0.2" 
-                    className="opacity-60 group-hover:opacity-100 transition-all scale-100 group-hover:scale-125"
+                    {/* Outer pulsating danger alert ring */}
+                    <circle
+                      cx={pos.x}
+                      cy={pos.y}
+                      r="52"
+                      fill="none"
+                      stroke="#EF4444"
+                      strokeWidth="1.2"
+                      className="animate-signal-pulse"
+                    />
+                    {/* Center spot bullet */}
+                    <circle cx={pos.x} cy={pos.y} r="3" fill="#EF4444" />
+                  </g>
+                );
+              })}
+
+              {/* 6. INTERACTIVE ROUTING ENGINE PATH OVERLAY */}
+              {activeRouting && userPos && (
+                <g id="tactical-active-routing-overlay">
+                  {(() => {
+                    const pathDataString = activeRouting.points.reduce((acc, pt, idx) => {
+                      return idx === 0 ? `M ${pt.x},${pt.y}` : `${acc} L ${pt.x},${pt.y}`;
+                    }, '');
+
+                    return (
+                      <>
+                        {/* Backup thick dark route support shadow */}
+                        <path
+                          d={pathDataString}
+                          fill="none"
+                          stroke="#0F172A"
+                          strokeWidth="8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          opacity="0.9"
+                        />
+                        {/* Active green signal line */}
+                        <path
+                          d={pathDataString}
+                          fill="none"
+                          stroke="#10B981"
+                          strokeWidth="4"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          opacity="0.85"
+                        />
+                        {/* Animated running dots indicating evacuations route direction */}
+                        <path
+                          d={pathDataString}
+                          fill="none"
+                          stroke="#FFF"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeDasharray="10, 14"
+                          className="animate-map-dash"
+                        />
+                        
+                        {/* Display small detour icons if safety router bended around threat nodes */}
+                        {activeRouting.bended && activeRouting.points[1] && (
+                          <g transform={`translate(${activeRouting.points[1].x}, ${activeRouting.points[1].y - 12})`}>
+                            <rect x="-35" y="-10" width="70" height="15" rx="3" fill="#F59E0B" fillOpacity="0.95" />
+                            <text x="0" y="1" fill="#000" fontSize="7" fontWeight="bold" fontFamily="monospace" textAnchor="middle">DETOUR ACTIVE</text>
+                          </g>
+                        )}
+                      </>
+                    );
+                  })()}
+                </g>
+              )}
+
+              {/* 7. ALL ELIGIBLE ENTITY ARRAYS (PINS) */}
+              {eligibleMarkers.map((m) => {
+                if (m.type === 'danger') return null; // Hazards handled with circles above
+                const pos = convertCoords(m.location.lat, m.location.lng);
+                const color = CONST_COLORS[m.type] || '#FFF';
+                const isSelected = selectedMarker?.id === m.id;
+
+                return (
+                  <g 
+                    key={`marker-${m.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedMarker(m);
+                      setSidebarTab('intel'); // switch tab onto inspector
+                    }}
+                    className="cursor-pointer group"
+                    id={`vector-pin-element-${m.id}`}
+                  >
+                    {/* Pin Selection ring marker */}
+                    {isSelected && (
+                      <circle 
+                        cx={pos.x} 
+                        cy={pos.y} 
+                        r="15" 
+                        fill="none" 
+                        stroke={color} 
+                        strokeWidth="2" 
+                        opacity="0.9"
+                        className="animate-pulse"
+                      />
+                    )}
+                    {/* Pulse behind icons */}
+                    <circle 
+                      cx={pos.x} 
+                      cy={pos.y} 
+                      r="8.5" 
+                      fill={color} 
+                      fillOpacity="0.2" 
+                      className="opacity-60 group-hover:opacity-100 transition-all scale-100 group-hover:scale-125"
+                    />
+                    {/* Pin body center core */}
+                    <polygon 
+                      points={`${pos.x},${pos.y+5} ${pos.x-4},${pos.y-2} ${pos.x+4},${pos.y-2}`}
+                      fill={color}
+                      stroke="#111827"
+                      strokeWidth="0.8"
+                    />
+                    <circle 
+                      cx={pos.x} 
+                      cy={pos.y-2} 
+                      r="5" 
+                      fill={color} 
+                      stroke="#111827" 
+                      strokeWidth="1.2"
+                    />
+                    {/* Tiny light center dot */}
+                    <circle 
+                      cx={pos.x} 
+                      cy={pos.y-2} 
+                      r="1.8" 
+                      fill="#FFF" 
+                    />
+                  </g>
+                );
+              })}
+
+              {/* 8. CURRENT USER LIVE LOCATION INDICATOR */}
+              {userPos && (
+                <g id="current-user-gps-dot">
+                  <circle
+                    cx={userPos.x}
+                    cy={userPos.y}
+                    r="13"
+                    fill="none"
+                    stroke="#3B82F6"
+                    strokeWidth="1"
+                    className="animate-signal-pulse"
                   />
-                  {/* Pin body center core */}
-                  <polygon 
-                    points={`${pos.x},${pos.y+5} ${pos.x-4},${pos.y-2} ${pos.x+4},${pos.y-2}`}
-                    fill={color}
-                    stroke="#111827"
-                    strokeWidth="0.8"
-                  />
-                  <circle 
-                    cx={pos.x} 
-                    cy={pos.y-2} 
-                    r="5" 
-                    fill={color} 
-                    stroke="#111827" 
-                    strokeWidth="1.2"
-                  />
-                  {/* Tiny light center dot */}
-                  <circle 
-                    cx={pos.x} 
-                    cy={pos.y-2} 
-                    r="1.8" 
-                    fill="#FFF" 
+                  <circle
+                    cx={userPos.x}
+                    cy={userPos.y}
+                    r="7"
+                    fill="#10B981"
+                    stroke="#FFF"
+                    strokeWidth="1.5"
                   />
                 </g>
-              );
-            })}
+              )}
 
-            {/* 8. CURRENT USER LIVE LOCATION INDICATOR */}
-            {userPos && (
-              <g id="current-user-gps-dot">
-                <circle
-                  cx={userPos.x}
-                  cy={userPos.y}
-                  r="13"
-                  fill="none"
-                  stroke="#3B82F6"
-                  strokeWidth="1"
-                  className="animate-signal-pulse"
-                />
-                <circle
-                  cx={userPos.x}
-                  cy={userPos.y}
-                  r="7"
-                  fill="#10B981"
-                  stroke="#FFF"
-                  strokeWidth="1.5"
-                />
+              {/* 9. STATS OVERLAY DECK & COMPASS */}
+              <g fontStyle="italic" fontSize="8.5" fill="#94A3B8" fontFamily="monospace" transform="translate(15, 460)">
+                <text x="0" y="0">🧭 OFFLINE VECTOR COMPASS • SCALE: 1 GRID CELL = 4.2 KM</text>
+                <line x1="0" y1="8" x2="160" y2="8" stroke="#475569" strokeWidth="1" />
+                <line x1="0" y1="4" x2="0" y2="12" stroke="#475569" strokeWidth="1" />
+                <line x1="80" y1="4" x2="80" y2="12" stroke="#475569" strokeWidth="1" />
+                <line x1="160" y1="4" x2="160" y2="12" stroke="#475569" strokeWidth="1" />
+                <text x="165" y="11" letterSpacing="1">SECURE VECTOR GRID LAYER LOADED</text>
               </g>
-            )}
+            </svg>
 
-            {/* 9. STATS OVERLAY DECK & COMPASS */}
-            <g fontStyle="italic" fontSize="8.5" fill="#94A3B8" fontFamily="monospace" transform="translate(15, 460)">
-              <text x="0" y="0">🧭 OFFLINE VECTOR COMPASS • SCALE: 1 GRID CELL = 4.2 KM</text>
-              <line x1="0" y1="8" x2="160" y2="8" stroke="#475569" strokeWidth="1" />
-              <line x1="0" y1="4" x2="0" y2="12" stroke="#475569" strokeWidth="1" />
-              <line x1="80" y1="4" x2="80" y2="12" stroke="#475569" strokeWidth="1" />
-              <line x1="160" y1="4" x2="160" y2="12" stroke="#475569" strokeWidth="1" />
-              <text x="165" y="11" letterSpacing="1">SECURE VECTOR GRID LAYER LOADED</text>
-            </g>
-          </svg>
-
-          {/* Quick tips panel */}
-          <div className="absolute top-2 right-2 bg-slate-950/90 border border-zinc-800 text-[9px] p-2 rounded text-zinc-400 max-w-xs font-mono select-none">
-            💡 Click anywhere in any grid cell coordinates to dispatch and drop a custom hazard, food spot, or rescue pin.
+            {/* Quick tips panel */}
+            <div className="absolute top-2 right-2 bg-slate-950/90 border border-zinc-800 text-[9px] p-2 rounded text-zinc-400 max-w-xs font-mono select-none">
+              💡 Click anywhere in any grid cell coordinates to dispatch and drop a custom hazard, food spot, or rescue pin.
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Dynamic Sidebar Control Desk */}
         <div id="selected-pin-info-panel" className="border rounded-xl bg-zinc-950/30 border-zinc-800 flex flex-col h-[400px] lg:h-auto overflow-hidden">

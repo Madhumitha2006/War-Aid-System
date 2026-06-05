@@ -173,12 +173,34 @@ export default function App() {
   const pendingTasksCount = storeState.rescueTasks.filter(t => t.status === 'open').length;
 
   return (
-    <div 
-      className={`min-h-screen text-sans flex flex-col justify-between transition-colors duration-300 ${
-        storeState.emergencyMode ? 'emergency-theme bg-black text-zinc-300' : 'bg-[#0A1628] text-slate-100'
-      }`}
-      id="waraid-main-body-container"
-    >
+    <div className="min-h-screen bg-[#05080e] md:bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] md:from-slate-950 md:via-zinc-950 md:to-black text-sans flex items-center justify-center relative overflow-hidden select-none">
+      
+      {/* 1. Subtle, clean grid and ambient overlays for modern aesthetic */}
+      <div className="hidden md:block absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,0.015)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.015)_1px,transparent_1px)] bg-[size:3rem_3rem] pointer-events-none" />
+      <div className="hidden md:block absolute top-[-20%] left-[-10%] w-[45rem] h-[45rem] rounded-full bg-emerald-500/5 blur-[120px] pointer-events-none" />
+      <div className="hidden md:block absolute bottom-[-20%] right-[-10%] w-[45rem] h-[45rem] rounded-full bg-sky-500/5 blur-[120px] pointer-events-none" />
+      
+      {/* 2. Sleek physical device shell wrapper */}
+      <div className="relative w-full h-[100vh] md:h-[820px] md:max-w-[400px] md:rounded-[48px] md:border-[10px] md:border-zinc-900 md:shadow-[0_25px_60px_-15px_rgba(0,0,0,0.95),_0_0_0_1px_rgba(255,255,255,0.06),_inset_0_0_20px_rgba(0,0,0,0.85)] flex flex-col bg-black overflow-hidden pointer-events-auto">
+        
+        {/* Dynamic Island Chamber */}
+        <div className="hidden md:flex absolute top-3 left-1/2 -translate-x-1/2 w-26 h-5 bg-black rounded-full z-50 items-center justify-between px-3 border border-zinc-800/30">
+          <div className="w-2 h-2 bg-zinc-900 rounded-full border border-zinc-855 flex items-center justify-center">
+            <div className="w-0.5 h-0.5 bg-zinc-950 rounded-full" />
+          </div>
+          <div className="w-1.5 h-1.5 bg-blue-900/30 rounded-full mr-1.5" />
+        </div>
+
+        {/* Ambient indicator bar inside virtual home button space */}
+        <div className="hidden md:block absolute bottom-1.5 left-1/2 -translate-x-1/2 w-24 h-1 bg-zinc-800/80 rounded-full z-50 pointer-events-none" />
+
+        {/* Inner Phone Body screen frame */}
+        <div 
+          className={`flex-1 flex flex-col justify-between overflow-hidden relative z-10 w-full h-full select-text transition-colors duration-300 md:rounded-[38px] ${
+            storeState.emergencyMode ? 'emergency-theme bg-black text-zinc-300' : 'bg-[#060D1A] text-slate-100'
+          }`}
+          id="waraid-main-body-container"
+        >
       
       {/* 1. App S.O.S Header */}
       <header 
@@ -467,6 +489,8 @@ export default function App() {
         />
       )}
 
+        </div>
+      </div>
     </div>
   );
 }

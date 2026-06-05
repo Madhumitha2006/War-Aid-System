@@ -39,6 +39,75 @@ function getGeminiClient(): GoogleGenAI {
   return geminiClient;
 }
 
+// Real-World SMS Carrier Integration Router (Twilio Gateway)
+app.post("/api/send-sms", async (req, res) => {
+  try {
+    const { to, body } = req.body;
+    if (!to || !body) {
+      res.status(400).json({ error: "Missing required 'to' or 'body' inputs." });
+      return;
+    }
+
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    const fromNumber = process.env.TWILIO_PHONE_NUMBER;
+
+    if (!accountSid || !authToken || !fromNumber) {
+      res.status(412).json({
+        success: false,
+        error: "TWILIO_CREDENTIALS_MISSING",
+        message: "Your Twilio Carrier credentials are not configured inside the server environment. Provide TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER in settings to send messages to actual cell phones."
+      });
+      return;
+    }
+
+    // Direct HTTP request to official Twilio POST resource without heavy external SDK container burden
+    const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
+    const basicAuth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
+
+    const params = new URLSearchParams();
+    params.append("To", to.trim());
+    params.append("From", fromNumber.trim());
+    params.append("Body", body.trim());
+
+    console.log(`[WARAID-SMS]: Initiating direct REST payload transmission to ${to}`);
+    const twilioResponse = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Basic ${basicAuth}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: params.toString(),
+    });
+
+    const data = await twilioResponse.json() as any;
+
+    if (twilioResponse.ok) {
+      console.log(`[WARAID-SMS]: Successful carrier dispatch. SID=${data.sid}`);
+      res.json({
+        success: true,
+        sid: data.sid,
+        status: data.status,
+        message: `Real carriers matched. Message sent successfully! Status: ${data.status}`
+      });
+    } else {
+      console.error(`[WARAID-SMS]: Carrier gateway error response: ${JSON.stringify(data)}`);
+      res.status(twilioResponse.status).json({
+        success: false,
+        error: "CARRIER_DISPATCH_REJECTED",
+        message: data.message || "Twilio gateway rejected dispatch registration."
+      });
+    }
+  } catch (err: any) {
+    console.error("[WARAID-SMS]: Fatal networking driver error:", err);
+    res.status(500).json({
+      success: false,
+      error: "DRIVER_EXCEPTION",
+      message: err.message
+    });
+  }
+});
+
 // REST API endpoint for multi-agent coordination
 app.post("/api/gemini/generate", async (req, res) => {
   try {
